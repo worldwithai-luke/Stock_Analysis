@@ -15,7 +15,7 @@ class StockPredictor:
     
     def predict_prices(self, stock_data, days=10, ma_short=10, ma_long=50):
         """
-        Predict future stock prices using moving averages and linear regression
+        Predict future stock prices using enhanced technical analysis and trend modeling
         
         Args:
             stock_data (pd.DataFrame): Historical stock data
@@ -27,6 +27,10 @@ class StockPredictor:
             pd.DataFrame: Predicted prices with dates
         """
         try:
+            # For long-term predictions (>1 year), use different approach
+            if days > 365:
+                return self._generate_long_term_predictions(stock_data, days, ma_short, ma_long)
+            
             # Calculate technical indicators
             features_df = self._calculate_features(stock_data, ma_short, ma_long)
             
@@ -115,6 +119,7 @@ class StockPredictor:
         last_date = features_df.index[-1]
         predictions = []
         prediction_dates = []
+        recent_prices = []
         
         # Get the last known features
         last_features = features_df.iloc[-1].copy()
@@ -158,7 +163,8 @@ class StockPredictor:
         predictions_df = pd.DataFrame({
             'Predicted_Price': predictions,
             'Confidence': ['Medium'] * days  # Simplified confidence metric
-        }, index=prediction_dates)
+        })
+        predictions_df.index = pd.DatetimeIndex(prediction_dates)
         
         return predictions_df
     
@@ -187,6 +193,114 @@ class StockPredictor:
         signal_line = macd_line.ewm(span=signal).mean()
         return macd_line, signal_line
     
+    def _generate_long_term_predictions(self, stock_data, days, ma_short, ma_long):
+        """
+        Generate long-term predictions (1+ years) using trend analysis and Monte Carlo simulation
+        """
+        try:
+            # Calculate historical annual growth rate
+            close_prices = stock_data['Close']
+            years_of_data = len(close_prices) / 252  # Approximate trading days per year
+            
+            if years_of_data >= 1:
+                total_return = (close_prices.iloc[-1] / close_prices.iloc[0]) - 1
+                annual_growth_rate = (1 + total_return) ** (1 / years_of_data) - 1
+            else:
+                # Use average daily return annualized
+                daily_returns = close_prices.pct_change().dropna()
+                annual_growth_rate = daily_returns.mean() * 252
+            
+            # Calculate volatility
+            daily_returns = close_prices.pct_change().dropna()
+            annual_volatility = daily_returns.std() * np.sqrt(252)
+            
+            # Apply some dampening for very long-term predictions
+            if days > 1825:  # 5 years
+                annual_growth_rate *= 0.7  # Conservative approach for very long term
+                annual_volatility *= 0.8
+            elif days > 730:  # 2 years
+                annual_growth_rate *= 0.8
+                annual_volatility *= 0.9
+            
+            # Generate future dates (business days only)
+            last_date = stock_data.index[-1]
+            future_dates = []
+            current_date = last_date
+            days_added = 0
+            
+            while days_added < days:
+                current_date += timedelta(days=1)
+                if current_date.weekday() < 5:  # Monday=0, Sunday=6
+                    future_dates.append(current_date)
+                    days_added += 1
+            
+            # Monte Carlo simulation for price paths
+            current_price = close_prices.iloc[-1]
+            predicted_prices = []
+            
+            for i in range(days):
+                # Days since start
+                days_elapsed = i + 1
+                years_elapsed = days_elapsed / 252
+                
+                # Trend component
+                trend_factor = (1 + annual_growth_rate) ** years_elapsed
+                
+                # Add some cyclical component (simplified economic cycles)
+                cycle_factor = 1 + 0.1 * np.sin(2 * np.pi * years_elapsed / 7)  # 7-year cycle
+                
+                # Add volatility with mean reversion
+                if i == 0:
+                    random_factor = 1 + np.random.normal(0, annual_volatility / np.sqrt(252))
+                else:
+                    # Mean reversion component
+                    prev_deviation = predicted_prices[-1] / (current_price * trend_factor) - 1
+                    mean_reversion = -0.1 * prev_deviation  # Gentle mean reversion
+                    daily_vol = annual_volatility / np.sqrt(252)
+                    random_factor = 1 + np.random.normal(mean_reversion, daily_vol)
+                
+                # Calculate predicted price
+                if i == 0:
+                    predicted_price = current_price * trend_factor * cycle_factor * random_factor
+                else:
+                    predicted_price = predicted_prices[-1] * (1 + annual_growth_rate/252) * random_factor
+                
+                # Add some bounds to prevent unrealistic values
+                max_daily_change = 0.15  # 15% max daily change
+                if i > 0:
+                    daily_change = (predicted_price / predicted_prices[-1]) - 1
+                    if abs(daily_change) > max_daily_change:
+                        daily_change = np.sign(daily_change) * max_daily_change
+                        predicted_price = predicted_prices[-1] * (1 + daily_change)
+                
+                predicted_prices.append(max(predicted_price, current_price * 0.1))  # Minimum 10% of current price
+            
+            # Create confidence levels based on time horizon
+            confidence_levels = []
+            for i in range(days):
+                years_out = (i + 1) / 252
+                if years_out <= 0.5:
+                    confidence = "High"
+                elif years_out <= 1:
+                    confidence = "Medium"
+                elif years_out <= 2:
+                    confidence = "Low"
+                else:
+                    confidence = "Very Low"
+                confidence_levels.append(confidence)
+            
+            # Create prediction DataFrame
+            predictions_df = pd.DataFrame({
+                'Predicted_Price': predicted_prices,
+                'Confidence': confidence_levels
+            }, index=pd.DatetimeIndex(future_dates))
+            
+            return predictions_df
+            
+        except Exception as e:
+            print(f"Error in long-term prediction: {str(e)}")
+            return None
+
     def get_prediction_accuracy(self, stock_data, days_back=30):
         """
         Evaluate prediction accuracy on historical data

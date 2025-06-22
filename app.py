@@ -64,13 +64,28 @@ def main():
         
         # Prediction settings
         st.header("Prediction Settings")
-        prediction_days = st.slider(
-            "Prediction Days:",
-            min_value=5,
-            max_value=30,
-            value=10,
-            help="Number of days to predict into the future"
+        
+        # Prediction period selection
+        prediction_period_options = {
+            "1 Week": 7,
+            "2 Weeks": 14,
+            "1 Month": 30,
+            "3 Months": 90,
+            "6 Months": 180,
+            "1 Year": 365,
+            "2 Years": 730,
+            "3 Years": 1095,
+            "5 Years": 1825
+        }
+        
+        selected_prediction_period = st.selectbox(
+            "Prediction Period:",
+            options=list(prediction_period_options.keys()),
+            index=2,  # Default to 1 Month
+            help="Select how far into the future to predict"
         )
+        
+        prediction_days = prediction_period_options[selected_prediction_period]
         
         ma_short = st.slider("Short MA Period:", 5, 50, 10)
         ma_long = st.slider("Long MA Period:", 20, 200, 50)
@@ -90,6 +105,7 @@ def main():
                     st.session_state.stock_data = stock_data
                     st.session_state.stock_info = stock_info
                     st.session_state.stock_symbol = stock_symbol
+                    st.session_state.selected_prediction_period = selected_prediction_period
                     
                     # Generate predictions
                     predictor = StockPredictor()
@@ -118,6 +134,7 @@ def display_stock_analysis():
     stock_info = st.session_state.stock_info
     predictions = st.session_state.predictions
     stock_symbol = st.session_state.stock_symbol
+    selected_prediction_period = st.session_state.get('selected_prediction_period', 'Unknown Period')
     
     # Stock info header
     col1, col2, col3, col4 = st.columns(4)
@@ -236,10 +253,24 @@ def display_stock_analysis():
         col1, col2 = st.columns([2, 1])
         
         with col1:
-            st.subheader("Predicted Prices (Next 10 Days)")
+            st.subheader(f"Predicted Prices ({selected_prediction_period})")
             pred_display = predictions.copy()
-            pred_display.index = pred_display.index.strftime('%Y-%m-%d')
-            st.dataframe(pred_display.round(2), use_container_width=True)
+            
+            # For longer periods, show only recent and future key dates
+            if len(pred_display) > 20:
+                # Show first 10 and last 10 predictions
+                display_df = pd.concat([
+                    pred_display.head(10),
+                    pred_display.tail(10)
+                ])
+                display_df = display_df.copy()
+                display_df.index = [date.strftime('%Y-%m-%d') for date in display_df.index]
+                st.dataframe(display_df.round(2), use_container_width=True)
+                st.info(f"Showing first 10 and last 10 predictions out of {len(pred_display)} total predictions")
+            else:
+                pred_display = pred_display.copy()
+                pred_display.index = [date.strftime('%Y-%m-%d') for date in pred_display.index]
+                st.dataframe(pred_display.round(2), use_container_width=True)
         
         with col2:
             st.subheader("Prediction Summary")
@@ -372,8 +403,10 @@ def create_technical_chart(stock_data, symbol):
     )
     
     # Add RSI reference lines
-    fig.add_hline(y=70, line_dash="dash", line_color="red", row=1, col=1)
-    fig.add_hline(y=30, line_dash="dash", line_color="green", row=1, col=1)
+    fig.add_shape(type="line", x0=stock_data.index[0], y0=70, x1=stock_data.index[-1], y1=70,
+                  line=dict(dash="dash", color="red"), row=1, col=1)
+    fig.add_shape(type="line", x0=stock_data.index[0], y0=30, x1=stock_data.index[-1], y1=30,
+                  line=dict(dash="dash", color="green"), row=1, col=1)
     
     # Calculate MACD
     macd_line, signal_line, histogram = calculate_macd(stock_data['Close'])
